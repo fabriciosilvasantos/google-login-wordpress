@@ -58,9 +58,6 @@ class Google_Login_Plugin {
         add_action('login_form', array($this, 'add_login_button'));
         add_action('init', array($this, 'handle_google_callback'));
 
-        // Hooks de AJAX
-        add_action('wp_ajax_google_login', array($this, 'handle_ajax_login'));
-        add_action('wp_ajax_nopriv_google_login', array($this, 'handle_ajax_login'));
     }
 
     public function activate() {
@@ -172,12 +169,20 @@ class Google_Login_Plugin {
     }
 
     private function get_google_auth_url() {
+        $state_data = array(
+            'nonce' => wp_create_nonce('google_login_nonce'),
+        );
+
+        if (isset($_GET['redirect_to'])) {
+            $state_data['redirect_to'] = esc_url_raw($_GET['redirect_to']);
+        }
+
         $params = array(
             'client_id' => $this->client_id,
             'redirect_uri' => $this->redirect_uri,
             'response_type' => 'code',
             'scope' => 'email profile',
-            'state' => wp_create_nonce('google_login_nonce')
+            'state' => base64_encode(json_encode($state_data))
         );
 
         return 'https://accounts.google.com/o/oauth2/v2/auth?' . http_build_query($params);
@@ -189,34 +194,53 @@ class Google_Login_Plugin {
         }
 
         if (!isset($_GET['code'])) {
-            wp_die('Código de autorização não fornecido');
+            $this->redirect_with_error('Código de autorização não fornecido');
         }
 
-        if (!isset($_GET['state']) || !wp_verify_nonce($_GET['state'], 'google_login_nonce')) {
-            wp_die('Nonce inválido');
+        $state_raw = isset($_GET['state']) ? $_GET['state'] : '';
+        $state_data = json_decode(base64_decode($state_raw), true);
+
+        if (!is_array($state_data) || !isset($state_data['nonce']) || !wp_verify_nonce($state_data['nonce'], 'google_login_nonce')) {
+            $this->redirect_with_error('Nonce inválido');
         }
 
         $code = sanitize_text_field($_GET['code']);
         $token_data = $this->get_google_token($code);
 
         if (is_wp_error($token_data)) {
-            wp_die($token_data->get_error_message());
+            $this->redirect_with_error($token_data->get_error_message());
         }
 
         $user_data = $this->get_google_user_data($token_data['access_token']);
 
         if (is_wp_error($user_data)) {
-            wp_die($user_data->get_error_message());
+            $this->redirect_with_error($user_data->get_error_message());
         }
 
         $user = $this->get_or_create_user($user_data);
 
         if (is_wp_error($user)) {
-            wp_die($user->get_error_message());
+            $this->redirect_with_error($user->get_error_message());
         }
 
         wp_set_auth_cookie($user->ID);
-        wp_redirect(home_url());
+
+        // Determine redirect URL
+        $redirect_to = home_url();
+        if (isset($state_data['redirect_to'])) {
+            $redirect_to = esc_url_raw($state_data['redirect_to']);
+        } elseif (user_can($user, 'manage_options')) {
+            $redirect_to = admin_url();
+        }
+
+        wp_redirect($redirect_to);
+        exit;
+    }
+
+    private function redirect_with_error($error_message) {
+        $login_url = wp_login_url();
+        $redirect_url = add_query_arg('error', urlencode($error_message), $login_url);
+        wp_redirect($redirect_url);
         exit;
     }
 
