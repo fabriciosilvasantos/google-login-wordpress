@@ -233,14 +233,14 @@ class Google_Login_Plugin {
             $redirect_to = admin_url();
         }
 
-        wp_redirect($redirect_to);
+        wp_safe_redirect($redirect_to);
         exit;
     }
 
     private function redirect_with_error($error_message) {
         $login_url = wp_login_url();
-        $redirect_url = add_query_arg('error', urlencode($error_message), $login_url);
-        wp_redirect($redirect_url);
+        $redirect_url = add_query_arg('error', $error_message, $login_url);
+        wp_safe_redirect($redirect_url);
         exit;
     }
 
